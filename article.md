@@ -1114,6 +1114,4 @@ export function createDedupeRequestsInterceptor(allowed = ["GET", "DELETE", "PUT
 }
 ```
 
-## Conclusion
-
 Well, that's all for now. I'm hope you find these _helpers/extensions_ as useful as we do! Other than that, i'll see you in the next article, happy coding! 🚀
