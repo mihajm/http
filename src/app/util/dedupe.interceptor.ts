@@ -17,7 +17,7 @@ export function noDedupe(ctx: HttpContext = new HttpContext()) {
 }
 
 export function createDedupeRequestsInterceptor(
-  allowed = ['GET', 'DELETE', 'PUT', 'HEAD', 'OPTIONS']
+  allowed = ['GET', 'DELETE', 'HEAD', 'OPTIONS']
 ): HttpInterceptorFn {
   const inFlight = new Map<string, Observable<HttpEvent<unknown>>>();
 
