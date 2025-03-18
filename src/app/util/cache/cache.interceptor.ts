@@ -60,7 +60,7 @@ export function createCacheInterceptor(
 
     return next(req).pipe(
       tap((e) => {
-        if (e instanceof HttpResponse) {
+        if (e instanceof HttpResponse && e.ok) {
           cache.storeWithInvalidation(key, e, opt.staleTime, opt.ttl);
         }
       })

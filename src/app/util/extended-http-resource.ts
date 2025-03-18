@@ -1,4 +1,5 @@
 import {
+  HttpClient,
   HttpHeaders,
   httpResource,
   HttpResourceOptions,
@@ -12,6 +13,7 @@ import {
   effect,
   EffectRef,
   inject,
+  isDevMode,
   ResourceStatus,
   Signal,
   untracked,
@@ -22,7 +24,7 @@ import {
   toObservable,
   toSignal,
 } from '@angular/core/rxjs-interop';
-import { interval, Subscription } from 'rxjs';
+import { firstValueFrom, interval, Subscription } from 'rxjs';
 import { injectCache, setCacheContext } from './cache';
 import { CircuitBreaker, createCircuitBreaker } from './circuit-breaker';
 import { createEqualRequest } from './equal-request';
@@ -51,7 +53,7 @@ export type ExtendedHttpResourceOptions<
 
 export type ExtendedHttpResourceRef<TResult> = HttpResourceRef<TResult> & {
   disabled: Signal<boolean>;
-  prefetch: () => Promise<void>;
+  prefetch: (req?: Partial<HttpResourceRequest>) => Promise<void>;
 };
 
 export function extendedHttpResource<TResult, TRaw = TResult>(
@@ -214,6 +216,10 @@ export function extendedHttpResource<TResult, TRaw = TResult>(
       )
     : resource.value;
 
+  const client = options.injector
+    ? options.injector.get(HttpClient)
+    : inject(HttpClient);
+
   return {
     ...resource,
     reload,
@@ -243,6 +249,33 @@ export function extendedHttpResource<TResult, TRaw = TResult>(
       options.equal
     ),
     disabled: computed(() => cb.isClosed() || req() === undefined),
-    prefetch: () => Promise.resolve(),
+    prefetch: async (partial) => {
+      const request = untracked(req);
+      if (!request) return Promise.resolve();
+
+      const prefetchRequest = {
+        ...request,
+        ...partial,
+      };
+
+      try {
+        await firstValueFrom(
+          client.request<TRaw>(
+            prefetchRequest.method ?? 'GET',
+            prefetchRequest.url,
+            {
+              ...prefetchRequest,
+              headers: prefetchRequest.headers as HttpHeaders,
+              observe: 'response',
+            }
+          )
+        );
+
+        return;
+      } catch (err) {
+        if (isDevMode()) console.error('Prefetch failed: ', err);
+        return;
+      }
+    },
   };
 }
