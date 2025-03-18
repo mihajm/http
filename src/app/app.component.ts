@@ -1,36 +1,38 @@
 import { Component, signal, untracked } from '@angular/core';
-import { RouterOutlet } from '@angular/router';
 import { extendedHttpResource } from './util';
-
 
 type Todo = {
   id: number;
   title: string;
-}
+};
 
 @Component({
   selector: 'app-root',
   template: `
+    loading: {{ todo.isLoading() }}
+    <br />
+    title: {{ todo.value().title }}
+    <br />
 
-  loading: {{todo.isLoading()}}
-  <br/>
-  title: {{todo.value().title}}
-  <br/>
-
-  <br />
-  <button style="margin-right: 1rem;" (click)="prev()" [disabled]="id() <= 1">Prev</button>
-  <button (click)="next()" [disabled]="id() >= 5">Next</button>
-  `
+    <br />
+    <button style="margin-right: 1rem;" (click)="prev()" [disabled]="id() <= 1">
+      Prev
+    </button>
+    <button (click)="next()" [disabled]="id() >= 5">Next</button>
+  `,
 })
 export class AppComponent {
   protected readonly id = signal(1);
 
-  protected readonly todo = extendedHttpResource<Todo>(() => ({
-    url: `https://jsonplaceholder.typicode.com/todos/${this.id()}`,
-  }), {
-    defaultValue: { id: 0, title: '' },
-    keepPrevious: true
-  });
+  protected readonly todo = extendedHttpResource<Todo>(
+    () => ({
+      url: `https://jsonplaceholder.typicode.com/todos/${this.id()}`,
+    }),
+    {
+      defaultValue: { id: 0, title: '' },
+      keepPrevious: true,
+    }
+  );
 
   protected next() {
     if (untracked(this.id) >= 5) return;
