@@ -1,4 +1,7 @@
-import { Component, signal, untracked } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { Component, inject, signal, untracked } from '@angular/core';
+import { toObservable } from '@angular/core/rxjs-interop';
+import { switchMap } from 'rxjs';
 import { extendedHttpResource } from './util';
 
 type Todo = {
@@ -41,6 +44,16 @@ export class AppComponent {
       keepPrevious: true,
     }
   );
+
+  private readonly client = inject(HttpClient);
+
+  test = toObservable(this.id)
+    .pipe(
+      switchMap((id) =>
+        this.client.get(`https://jsonplaceholder.typicode.com/todos/${id}`)
+      )
+    )
+    .subscribe();
 
   protected next() {
     if (untracked(this.id) >= 5) return;

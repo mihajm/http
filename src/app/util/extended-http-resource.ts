@@ -20,6 +20,7 @@ import { interval, Subscription } from 'rxjs';
 import { CircuitBreaker, createCircuitBreaker } from './circuit-breaker';
 import { equalRequest } from './equal-request';
 import { keepPrevious } from './keep-previous';
+import { retryOnError, RetryOptions } from './retry-on-error';
 
 export type ExtendedHttpResourceOptions<
   TResult,
@@ -29,6 +30,7 @@ export type ExtendedHttpResourceOptions<
   keepPrevious?: boolean;
   refresh?: number;
   circuitBreaker?: CircuitBreaker;
+  retry?: RetryOptions;
 };
 
 export type ExtendedHttpResourceRef<TResult> = HttpResourceRef<TResult> & {
@@ -73,14 +75,34 @@ export function extendedHttpResource<TResult, TRaw = TResult>(
     parse: options.parse as any,
   });
 
+  const retryEffect = retryOnError(resource, options.retry);
+
+  const reload = (): boolean => {
+    refreshSub?.unsubscribe();
+    refreshSub = null;
+    cb.halfOpen();
+
+    const hasReloaded = resource.reload();
+
+    if (options.refresh) {
+      refreshSub = interval(options.refresh)
+        .pipe(takeUntilDestroyed(destroyRef))
+        .subscribe(() => resource.reload());
+    }
+
+    return hasReloaded;
+  };
+
   let statusSub = toObservable(resource.status)
     .pipe(takeUntilDestroyed(destroyRef))
     .subscribe((status) => {
       switch (status) {
-        case ResourceStatus.Resolved:
+        case ResourceStatus.Resolved: {
           return cb.success();
-        case ResourceStatus.Error:
+        }
+        case ResourceStatus.Error: {
           return cb.fail();
+        }
       }
     });
 
@@ -101,30 +123,15 @@ export function extendedHttpResource<TResult, TRaw = TResult>(
     });
   }
 
-  const reload = (): boolean => {
-    refreshSub?.unsubscribe();
-    refreshSub = null;
-    cb.halfOpen();
-
-    const hasReloaded = resource.reload();
-
-    if (options.refresh) {
-      refreshSub = interval(options.refresh)
-        .pipe(takeUntilDestroyed(destroyRef))
-        .subscribe(() => resource.reload());
-    }
-
-    return hasReloaded;
-  };
-
   return {
     ...resource,
     reload,
     destroy: () => {
       refreshSub?.unsubscribe();
       statusSub.unsubscribe();
-      resource.destroy();
       onErrorEffect?.destroy();
+      retryEffect.destroy();
+      resource.destroy();
     },
     statusCode: keepPrevious<number | undefined>(
       resource.statusCode,
