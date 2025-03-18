@@ -1,5 +1,5 @@
 import { Component, signal, untracked } from '@angular/core';
-import { extendedHttpResource } from './util';
+import { extendedResource } from './util';
 
 type Todo = {
   id: number;
@@ -30,7 +30,7 @@ type Todo = {
 export class AppComponent {
   protected readonly id = signal(1);
 
-  protected readonly todo = extendedHttpResource<Todo>(
+  protected readonly todo = extendedResource<Todo>(
     () => ({
       url: `https://jsonplaceholder.typicode.com/todos/${this.id()}`,
     }),

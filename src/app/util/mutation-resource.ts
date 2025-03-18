@@ -1,19 +1,24 @@
-import { HttpResourceRequest } from '@angular/common/http';
+import {
+  HttpResourceRef,
+  type HttpResourceRequest,
+} from '@angular/common/http';
 import {
   computed,
   DestroyRef,
   inject,
   ResourceStatus,
+  Signal,
   signal,
+  untracked,
 } from '@angular/core';
 import { takeUntilDestroyed, toObservable } from '@angular/core/rxjs-interop';
-import { filter, map, Observable, of, switchMap } from 'rxjs';
+import { combineLatestWith, filter, map } from 'rxjs';
 import { createEqualRequest } from './equal-request';
 import {
-  extendedHttpResource,
-  ExtendedHttpResourceOptions,
-  ExtendedHttpResourceRef,
-} from './extended-http-resource';
+  extendedResource,
+  type ExtendedResourceRef,
+  type ExtendResourceOptions,
+} from './extended-resource';
 
 type StatusResult<TResult> =
   | {
@@ -30,56 +35,47 @@ export type MutationResourceOptions<
   TRaw = TResult,
   TCTX = void
 > = Omit<
-  ExtendedHttpResourceOptions<TResult, TRaw>,
-  'onError' | 'keepPrevious' | 'refresh' | 'cache'
+  ExtendResourceOptions<TResult, TRaw>,
+  'onError' | 'keepPrevious' | 'refresh' | 'cache' // we can't keep previous values, refresh or cache mutations as they are meant to be one-off operations
 > & {
   onMutate?: (value: NoInfer<TResult>) => TCTX;
   onError?: (error: unknown, ctx: NoInfer<TCTX>) => void;
   onSuccess?: (value: NoInfer<TResult>, ctx: NoInfer<TCTX>) => void;
   onSettled?: (ctx: NoInfer<TCTX>) => void;
+  optimisticlyUpdate?: HttpResourceRef<TResult>;
 };
 
 export type MutationResourceRef<TResult> = Omit<
-  ExtendedHttpResourceRef<TResult>,
-  'prefetch' | 'value' | 'set' | 'update'
+  ExtendedResourceRef<TResult>,
+  'prefetch' | 'value' | 'hasValue' | 'set' | 'update' // we don't allow manually viewing the returned data or updating it manually, prefetching a mutation also doesn't make any sense
 > & {
   mutate: (
     value: Omit<HttpResourceRequest, 'body'> & { body: TResult }
   ) => void;
+  current: Signal<
+    (Omit<HttpResourceRequest, 'body'> & { body: TResult }) | null
+  >;
 };
 
 export function mutationResource<TResult, TRaw = TResult, TCTX = void>(
   request: () => Omit<Partial<HttpResourceRequest>, 'body'> | undefined,
-  options: MutationResourceOptions<TResult, TRaw, TCTX> & {
-    defaultValue: NoInfer<TResult>;
-  }
-): MutationResourceRef<TResult>;
-
-export function mutationResource<TResult, TRaw = TResult, TCTX = void>(
-  request: () => Omit<Partial<HttpResourceRequest>, 'body'> | undefined,
   options: MutationResourceOptions<TResult, TRaw, TCTX>
-): MutationResourceRef<TResult | undefined>;
-
-export function mutationResource<TResult, TRaw = TResult, TCTX = void>(
-  request: () => Omit<Partial<HttpResourceRequest>, 'body'> | undefined,
-  options: MutationResourceOptions<TResult, TRaw, TCTX>
-): MutationResourceRef<TResult | undefined> {
+): MutationResourceRef<TResult> {
   const equal = createEqualRequest(options.equal);
 
   const baseRequest = computed(() => request(), {
     equal,
   });
 
-  const nextRequest = signal<Omit<Partial<HttpResourceRequest>, 'body'> | null>(
-    null,
-    {
-      equal: (a, b) => {
-        if (!a && !b) return true;
-        if (!a || !b) return false;
-        return equal(a, b);
-      },
-    }
-  );
+  const nextRequest = signal<
+    (Omit<HttpResourceRequest, 'body'> & { body: TResult }) | null
+  >(null, {
+    equal: (a, b) => {
+      if (!a && !b) return true;
+      if (!a || !b) return false;
+      return equal(a, b);
+    },
+  });
 
   const req = computed((): HttpResourceRequest | undefined => {
     const nr = nextRequest();
@@ -97,9 +93,46 @@ export function mutationResource<TResult, TRaw = TResult, TCTX = void>(
     };
   });
 
-  const { onMutate, onError, onSuccess, onSettled, ...rest } = options;
+  const {
+    onMutate: providedOnMutate,
+    onError: providedOnError,
+    onSuccess: providedOnSuccess,
+    onSettled,
+    ...rest
+  } = options;
 
-  const resource = extendedHttpResource<TResult, TRaw>(req, rest);
+  let prevOptimisticValue: TResult | null = null;
+
+  const optimisticResource = options.optimisticlyUpdate;
+
+  const onMutate = optimisticResource
+    ? (val: TResult) => {
+        prevOptimisticValue = untracked(optimisticResource.value);
+        optimisticResource.set(val);
+        return providedOnMutate?.(val);
+      }
+    : providedOnMutate;
+
+  const onError = optimisticResource
+    ? (err: unknown, ctx: TCTX) => {
+        if (prevOptimisticValue !== null)
+          optimisticResource.set(prevOptimisticValue);
+
+        providedOnError?.(err, ctx);
+      }
+    : providedOnError;
+
+  const onSuccess = optimisticResource
+    ? (val: TResult, ctx: TCTX) => {
+        optimisticResource.set(val);
+        providedOnSuccess?.(val, ctx);
+      }
+    : providedOnSuccess;
+
+  const resource = extendedResource<TResult, TRaw>(req, {
+    ...rest,
+    defaultValue: null as TResult, // doesnt matter since .value is not accessible
+  });
 
   let ctx: TCTX = undefined as TCTX;
 
@@ -107,31 +140,28 @@ export function mutationResource<TResult, TRaw = TResult, TCTX = void>(
     ? options.injector.get(DestroyRef)
     : inject(DestroyRef);
 
-  const error = toObservable(resource.error);
-  const value = toObservable(resource.value);
+  const error$ = toObservable(resource.error);
+  const value$ = toObservable(resource.value);
 
   const statusSub = toObservable(resource.status)
     .pipe(
-      switchMap((status): Observable<StatusResult<TResult> | null> => {
-        if (status === ResourceStatus.Error) {
-          return error.pipe(
-            map((err) => ({
-              error: err,
-              status: ResourceStatus.Error,
-            }))
-          );
+      combineLatestWith(error$, value$),
+      map(([status, error, value]): StatusResult<TResult> | null => {
+        if (status === ResourceStatus.Error && error) {
+          return {
+            status: ResourceStatus.Error,
+            error,
+          };
         }
 
         if (status === ResourceStatus.Resolved) {
-          return value.pipe(
-            map((val) => ({
-              value: val as TResult,
-              status: ResourceStatus.Resolved,
-            }))
-          );
+          return {
+            status: ResourceStatus.Resolved,
+            value,
+          };
         }
 
-        return of(null);
+        return null;
       }),
       filter((v) => v !== null),
       takeUntilDestroyed(destroyRef)
@@ -155,5 +185,6 @@ export function mutationResource<TResult, TRaw = TResult, TCTX = void>(
       ctx = onMutate?.(value.body as TResult) as TCTX;
       nextRequest.set(value);
     },
+    current: nextRequest,
   };
 }

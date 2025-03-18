@@ -8,9 +8,17 @@ export type CircuitBreaker = {
   fail: () => void;
   success: () => void;
   halfOpen: () => void;
+  destroy: () => void;
 };
 
-export function createCircuitBreaker(
+// false allows for opt out of circuit breaker
+export type CircuitBreakerOptions =
+  | false
+  | CircuitBreaker
+  | { treshold?: number; timeout?: number };
+
+// allow for top level creation (for example in a service)
+function internalCeateCircuitBreaker(
   treshold = 5,
   resetTimeout = 30000
 ): CircuitBreaker {
@@ -35,7 +43,7 @@ export function createCircuitBreaker(
     failureCount.set(treshold - 1);
   };
 
-  effect((cleanup) => {
+  const effectRef = effect((cleanup) => {
     if (!isClosed()) return;
 
     const timeout = setTimeout(tryOnce, resetTimeout);
@@ -54,5 +62,35 @@ export function createCircuitBreaker(
     fail,
     success,
     halfOpen: tryOnce,
+    destroy: () => effectRef.destroy(),
   };
+}
+
+function createNeverBrokenCircuitBreaker(): CircuitBreaker {
+  return {
+    isClosed: computed(() => false),
+    status: signal('OPEN'),
+    fail: () => {
+      // noop
+    },
+    success: () => {
+      // noop
+    },
+    halfOpen: () => {
+      // noop
+    },
+    destroy: () => {
+      // noop
+    },
+  };
+}
+
+export function createCircuitBreaker(
+  opt?: CircuitBreakerOptions
+): CircuitBreaker {
+  if (opt === false) return createNeverBrokenCircuitBreaker();
+
+  if (opt && 'isClosed' in opt) return opt;
+
+  return internalCeateCircuitBreaker(opt?.treshold, opt?.timeout);
 }

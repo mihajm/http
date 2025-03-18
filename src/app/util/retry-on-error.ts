@@ -1,4 +1,4 @@
-import { HttpResourceRef } from '@angular/common/http';
+import { type HttpResourceRef } from '@angular/common/http';
 import { effect, ResourceStatus } from '@angular/core';
 
 export type RetryOptions =
@@ -8,7 +8,11 @@ export type RetryOptions =
       backoff?: number;
     };
 
-export function retryOnError(res: HttpResourceRef<any>, opt?: RetryOptions) {
+// Retry on error, if number is provided it will retry that many times with exponential backoff, otherwise it will use the options provided
+export function retryOnError<T>(
+  res: HttpResourceRef<T>,
+  opt?: RetryOptions
+): HttpResourceRef<T> {
   const max = opt ? (typeof opt === 'number' ? opt : opt.max ?? 0) : 0;
   const backoff = typeof opt === 'object' ? opt.backoff ?? 1000 : 1000;
 
@@ -33,7 +37,7 @@ export function retryOnError(res: HttpResourceRef<any>, opt?: RetryOptions) {
     retries = 0;
   };
 
-  return effect(() => {
+  const ref = effect(() => {
     switch (res.status()) {
       case ResourceStatus.Error:
         return onError();
@@ -41,4 +45,12 @@ export function retryOnError(res: HttpResourceRef<any>, opt?: RetryOptions) {
         return onSuccess();
     }
   });
+
+  return {
+    ...res,
+    destroy: () => {
+      ref.destroy(); // cleanup on manual destroy
+      res.destroy();
+    },
+  };
 }

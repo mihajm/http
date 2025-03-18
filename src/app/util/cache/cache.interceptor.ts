@@ -1,10 +1,10 @@
 import {
   HttpContext,
   HttpContextToken,
-  HttpEvent,
-  HttpHandlerFn,
-  HttpInterceptorFn,
-  HttpRequest,
+  type HttpEvent,
+  type HttpHandlerFn,
+  type HttpInterceptorFn,
+  type HttpRequest,
   HttpResponse,
 } from '@angular/common/http';
 import { Observable, of, tap } from 'rxjs';
@@ -51,7 +51,7 @@ export function createCacheInterceptor(
     if (!opt.cache) return next(req);
 
     const key = opt.key ?? req.urlWithParams;
-    const entry = cache.getEntry(key);
+    const entry = cache.getUntracked(key);
 
     // If the entry is not stale, return it
     if (entry && entry.stale > Date.now()) return of(entry.value);
@@ -61,7 +61,7 @@ export function createCacheInterceptor(
     return next(req).pipe(
       tap((e) => {
         if (e instanceof HttpResponse && e.ok) {
-          cache.storeWithInvalidation(key, e, opt.staleTime, opt.ttl);
+          cache.store(key, e, opt.staleTime, opt.ttl);
         }
       })
     );

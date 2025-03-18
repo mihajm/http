@@ -1,14 +1,16 @@
 import { HttpEvent } from '@angular/common/http';
-import { inject, InjectionToken, Provider } from '@angular/core';
 import {
-  BehaviorSubject,
-  combineLatestWith,
-  map,
-  Observable,
-  Subject,
-  takeUntil,
-} from 'rxjs';
+  computed,
+  inject,
+  InjectionToken,
+  Injector,
+  Provider,
+  Signal,
+  untracked,
+} from '@angular/core';
+import { Subject } from 'rxjs';
 import { v7 } from 'uuid';
+import { mutable } from './mutable';
 
 type LRUCleanupType = {
   type: 'lru';
@@ -33,19 +35,17 @@ type CacheEntry<T> = {
 
 export type CleanupType = LRUCleanupType | OldsetCleanupType;
 
-const DEFAULT_CLEANUP_OPT = {
-  type: 'lru',
-  maxSize: 1000,
-  checkInterval: 1000 * 60 * 60, // 1 hour
-} satisfies LRUCleanupType;
-
 const ONE_DAY = 1000 * 60 * 60 * 24;
 const ONE_HOUR = 1000 * 60 * 60;
 
+const DEFAULT_CLEANUP_OPT = {
+  type: 'lru',
+  maxSize: 200,
+  checkInterval: ONE_HOUR,
+} satisfies LRUCleanupType;
+
 export class Cache<T> {
-  private readonly internal$ = new BehaviorSubject(
-    new Map<string, CacheEntry<T>>()
-  );
+  private readonly internal = mutable(new Map<string, CacheEntry<T>>());
   private readonly destroy$ = new Subject<void>();
   private readonly cleanupOpt: CleanupType;
 
@@ -65,12 +65,14 @@ export class Cache<T> {
     if (this.cleanupOpt.maxSize <= 0)
       throw new Error('maxSize must be greater than 0');
 
+    // cleanup cache based on provided options regularly
     const cleanupInterval = setInterval(() => {
       this.cleanup();
     }, cleanupOpt.checkInterval);
 
     const destroyId = v7();
 
+    // cleanup if object is garbage collected, this is because the cache can be quite large from a memory standpoint & we dont want all that floating garbage
     const registry = new FinalizationRegistry((id: string) => {
       if (id === destroyId) {
         clearInterval(cleanupInterval);
@@ -81,92 +83,62 @@ export class Cache<T> {
     registry.register(this, destroyId);
   }
 
-  getEntry(key: string) {
-    const found = this.internal$.value.get(key);
-    if (!found) return null;
-    if (found.expiresAt <= Date.now()) {
-      clearTimeout(found.timeout);
-      this.internal$.value.delete(key);
-      return null;
-    }
-    return found;
+  private getInternal(key: () => string | null): Signal<CacheEntry<T> | null> {
+    const keySignal = computed(() => key());
+
+    return computed(() => {
+      const key = keySignal();
+      if (!key) return null;
+      const found = this.internal().get(key);
+      if (!found || found.expiresAt <= Date.now()) return null;
+      found.useCount++;
+      return found;
+    });
   }
 
-  private getEntryAndStale(key: string) {
-    const found = this.getEntry(key);
-    if (!found) return null;
-
-    return {
-      entry: found,
-      isStale: found.stale < Date.now(),
-    };
+  getUntracked(key: string): CacheEntry<T> | null {
+    return untracked(this.getInternal(() => key));
   }
 
-  get(key: string | null) {
-    if (!key) return null;
-    const found = this.getEntryAndStale(key);
-    if (!found) return null;
-    found.entry.useCount++;
-
-    return { value: found.entry.value, isStale: found.isStale };
+  get(key: () => string | null): Signal<CacheEntry<T> | null> {
+    return this.getInternal(key);
   }
 
-  store(key: string, value: T) {
-    this.storeWithInvalidation(key, value, this.staleTime, this.ttl);
-  }
-
-  storeWithInvalidation(
-    key: string,
-    value: T,
-    staleTime: number = this.staleTime,
-    ttl: number = this.ttl
-  ) {
-    const entry = this.getEntry(key);
+  store(key: string, value: T, staleTime = this.staleTime, ttl = this.ttl) {
+    const entry = this.getUntracked(key);
     if (entry) {
-      clearTimeout(entry.timeout);
+      clearTimeout(entry.timeout); // stop invalidation
     }
 
     const prevCount = entry?.useCount ?? 0;
 
-    this.internal$.value.set(key, {
-      value,
-      created: entry?.created ?? Date.now(),
-      useCount: prevCount + 1,
-      stale: Date.now() + staleTime,
-      expiresAt: Date.now() + this.ttl,
-      timeout: setTimeout(() => this.invalidate(key), ttl),
+    this.internal.mutate((map) => {
+      map.set(key, {
+        value,
+        created: entry?.created ?? Date.now(),
+        useCount: prevCount + 1,
+        stale: Date.now() + staleTime,
+        expiresAt: Date.now() + ttl,
+        timeout: setTimeout(() => this.invalidate(key), ttl),
+      });
+      return map;
     });
-
-    this.internal$.next(this.internal$.value);
-
-    this.cleanup();
   }
 
   invalidate(key: string) {
-    const entry = this.getEntry(key);
-    if (entry) {
-      clearTimeout(entry.timeout);
-      this.internal$.value.delete(key);
-      this.internal$.next(this.internal$.value);
-    }
-  }
-
-  changes$(key$: Observable<string | null>) {
-    return key$.pipe(
-      combineLatestWith(this.internal$),
-      map(([key]) => {
-        if (!key) return null;
-        const found = this.get(key);
-        return found?.value ?? null;
-      }),
-      takeUntil(this.destroy$)
-    );
+    const entry = this.getUntracked(key);
+    if (!entry) return;
+    clearTimeout(entry.timeout);
+    this.internal.mutate((map) => {
+      map.delete(key);
+      return map;
+    });
   }
 
   private cleanup() {
-    if (this.internal$.value.size <= this.cleanupOpt.maxSize) return;
+    if (untracked(this.internal).size <= this.cleanupOpt.maxSize) return;
 
-    const sorted = Array.from(this.internal$.value.entries()).toSorted(
+    const sorted = Array.from(untracked(this.internal).entries()).toSorted(
       (a, b) => {
         if (this.cleanupOpt.type === 'lru') {
           return a[1].useCount - b[1].useCount; // least used first
@@ -185,7 +157,7 @@ export class Cache<T> {
       clearTimeout(e.timeout);
     });
 
-    this.internal$.next(new Map(keep));
+    this.internal.set(new Map(keep));
   }
 }
 
@@ -206,6 +178,8 @@ export function provideCache(opt?: CacheOptions): Provider {
   };
 }
 
-export function injectCache() {
-  return inject(CLIENT_CACHE_TOKEN);
+export function injectCache(injector?: Injector) {
+  return injector
+    ? injector.get(CLIENT_CACHE_TOKEN)
+    : inject(CLIENT_CACHE_TOKEN);
 }
