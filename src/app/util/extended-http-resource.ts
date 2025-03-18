@@ -25,7 +25,7 @@ import {
 import { interval, Subscription } from 'rxjs';
 import { injectCache, setCacheContext } from './cache';
 import { CircuitBreaker, createCircuitBreaker } from './circuit-breaker';
-import { equalRequest } from './equal-request';
+import { createEqualRequest } from './equal-request';
 import { keepPrevious } from './keep-previous';
 import { retryOnError, RetryOptions } from './retry-on-error';
 import { toWritable } from './to-writable';
@@ -51,6 +51,7 @@ export type ExtendedHttpResourceOptions<
 
 export type ExtendedHttpResourceRef<TResult> = HttpResourceRef<TResult> & {
   disabled: Signal<boolean>;
+  prefetch: () => Promise<void>;
 };
 
 export function extendedHttpResource<TResult, TRaw = TResult>(
@@ -82,7 +83,7 @@ export function extendedHttpResource<TResult, TRaw = TResult>(
       return request();
     },
     {
-      equal: equalRequest,
+      equal: createEqualRequest(options.equal),
     }
   );
 
@@ -242,5 +243,6 @@ export function extendedHttpResource<TResult, TRaw = TResult>(
       options.equal
     ),
     disabled: computed(() => cb.isClosed() || req() === undefined),
+    prefetch: () => Promise.resolve(),
   };
 }

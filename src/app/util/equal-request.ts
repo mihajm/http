@@ -1,4 +1,5 @@
 import { HttpResourceRequest } from '@angular/common/http';
+import { ValueEqualityFn } from '@angular/core';
 import { hash } from './hash';
 import { keys } from './object';
 
@@ -72,23 +73,29 @@ function equalContext(
   return aKeys.every((key) => a[key] === b[key]);
 }
 
-export function equalRequest(
-  a: HttpResourceRequest | undefined,
-  b: HttpResourceRequest | undefined
-): boolean {
-  if (!a && !b) return true;
-  if (!a || !b) return false;
+export function createEqualRequest<TResult>(
+  equalResult?: ValueEqualityFn<TResult>
+) {
+  const eqb = equalResult ?? equalBody;
 
-  if (a.url !== b.url) return false;
-  if (a.method !== b.method) return false;
-  if (!equalParams(a.params, b.params)) return false;
-  if (!equalHeaders(a.headers, b.headers)) return false;
-  if (!equalBody(a.body, b.body)) return false;
-  if (!equalContext(a.context, b.context)) return false;
+  return (
+    a: Partial<HttpResourceRequest> | undefined,
+    b: Partial<HttpResourceRequest> | undefined
+  ) => {
+    if (!a && !b) return true;
+    if (!a || !b) return false;
 
-  if (a.withCredentials !== b.withCredentials) return false;
-  if (a.reportProgress !== b.reportProgress) return false;
-  if (!equalTransferCache(a.transferCache, b.transferCache)) return false;
+    if (a.url !== b.url) return false;
+    if (a.method !== b.method) return false;
+    if (!equalParams(a.params, b.params)) return false;
+    if (!equalHeaders(a.headers, b.headers)) return false;
+    if (!eqb(a.body as TResult, b.body as TResult)) return false;
+    if (!equalContext(a.context, b.context)) return false;
 
-  return false;
+    if (a.withCredentials !== b.withCredentials) return false;
+    if (a.reportProgress !== b.reportProgress) return false;
+    if (!equalTransferCache(a.transferCache, b.transferCache)) return false;
+
+    return true;
+  };
 }
