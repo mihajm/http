@@ -8,6 +8,8 @@ import {
 import {
   computed,
   DestroyRef,
+  effect,
+  EffectRef,
   inject,
   ResourceStatus,
   Signal,
@@ -89,6 +91,16 @@ export function extendedHttpResource<TResult, TRaw = TResult>(
       .subscribe(() => resource.reload());
   }
 
+  let onErrorEffect: EffectRef | null = null;
+  const onError = options.onError;
+  if (onError) {
+    onErrorEffect = effect(() => {
+      const err = resource.error();
+      if (!err) return;
+      onError(err);
+    });
+  }
+
   const reload = (): boolean => {
     refreshSub?.unsubscribe();
     refreshSub = null;
@@ -112,6 +124,7 @@ export function extendedHttpResource<TResult, TRaw = TResult>(
       refreshSub?.unsubscribe();
       statusSub.unsubscribe();
       resource.destroy();
+      onErrorEffect?.destroy();
     },
     statusCode: keepPrevious<number | undefined>(
       resource.statusCode,
