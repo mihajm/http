@@ -15,10 +15,16 @@ type Todo = {
     <br />
 
     <br />
-    <button style="margin-right: 1rem;" (click)="prev()" [disabled]="id() <= 1">
+    <button
+      style="margin-right: 1rem;"
+      (click)="prev()"
+      [disabled]="id() <= 1 || todo.disabled()"
+    >
       Prev
     </button>
-    <button (click)="next()" [disabled]="id() >= 5">Next</button>
+    <button (click)="next()" [disabled]="id() >= 5 || todo.disabled()">
+      Next
+    </button>
   `,
 })
 export class AppComponent {
@@ -26,7 +32,9 @@ export class AppComponent {
 
   protected readonly todo = extendedHttpResource<Todo>(
     () => ({
-      url: `https://jsonplaceholder.typicode.com/todos/${this.id()}`,
+      url: `https://jsonplaceholder.typicode.com/todos/${
+        this.id() > 2 ? 'testeststes' : this.id()
+      }`,
     }),
     {
       defaultValue: { id: 0, title: '' },
