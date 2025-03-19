@@ -1,12 +1,16 @@
 # Fun-grained Reactivity in Angular: Part 3 - Client-Side HTTP
 
-In the previous installments of this series, we explored building foundational signal-based primitives such (`mutable`, `store`, `derived`) and applied them to create reactive form controls. This time, we turn our attention to another critical aspect of modern web applications: _client-side_ management of asynchronous data. Don't worry though we'll get to _server-side_ soon enough! ;)
+In the previous installments of this series, we explored building foundational signal-based primitives such (`mutable`, `store`, `derived`) and applied them to create reactive form controls. This time, we turn our attention to another critical aspect of modern web applications: _client-side_ management of asynchronous data. Don't worry though we'll get to _server-side_ (featuring [Analog](https://analogjs.org/)) soon enough! ;)
 
 ## Why...just why?
 
-Angular has long offered quite a robust suite of tools to manage HTTP communication/asyn state. Built in tools such as `HttpClient` the `AsyncPipe`, interceptors etc. have allowed us to build very advanced & robust features throughout the years, but it seems times are shifting. Angular is evolving/extending/replacing these primitives with some signal based alternatives such as `httpResource`, which allow us to better hook in to our _new 'fine-grained' state_, and honestly it's about time! RxJs Observables have long been something that most people need time to wrap their heads around & recently `HttpClient` has been the source of most (if not all) `Observables` in _high-level_ parts of our codebase. Likewise the typical pattern of having a Service class whose function returns an `Observable`, which completes when the request finishes/errors, has always been slightly off to me...it makes sense for socket like subscriptions, but not for one-and-done requests. It's why I, personally, welcome all the new signal based primitives, such as `httpResource`, hopefuly they make our livers much easier & our codebases more sane.
+Angular has long offered quite a robust suite of tools to manage HTTP communication/asyn state. Built in tools such as `HttpClient`, the `AsyncPipe`, interceptors etc. have allowed us to build very advanced & robust features throughout the years. But it seems times are shifting.
 
-There are however...one or two more things to think about with our new reality as of Angular 19.2...`httpResource` isn't _really_ meant for mutating server side data through say PATCH requests, you can do it, but what signal should you react to & how do you begin to _set things up_. Likewise there is a bit of additional logic we tend to need in our modern client side applications, such as retry-ing on error, caching, request deduplication & more, it's one of the many reasons I and (I assume) a lot of you have reached for libraries such as [tanstack query's new Angular adapter](https://tanstack.com/query/v5/docs/framework/angular/overview). In fact in v18 we replaced quite a decent chunk of our own http logic with tanstack query & we're very _mostly_ loved the results :) so if you're looking for a _battle tested_ library to handle these things for you, I'd say look no further...add the library & get back to coding feature's you're clients will love.
+Angular is evolving these primitives with signal based alternatives such as `httpResource`, which allow us to better hook in to our _new 'fine-grained' state_, and honestly it's about time! RxJs Observables have long been something that most people need time to wrap their heads around & recently `HttpClient` has been the source of most (if not all) `Observables` in _high-level_ parts of our codebase. Likewise the typical pattern of having a Service class whose function returns an `Observable`, which completes when the request finishes/errors, has always been slightly off to me...it makes sense for socket like subscriptions, but not for one-and-done requests. It's why I, personally, welcome all the new signal based primitives, such as `httpResource`, hopefuly they make our lives easier & our codebases more sane.
+
+There are however...one or two more things to think about with our new reality as of Angular 19.2...`httpResource` isn't _really_ meant for mutating server side data through say PATCH requests, you can do it, but what signal should you react to & how do you begin to _set things up_.
+
+Likewise there is a bit of additional logic we tend to need in our modern client side applications, such as retry-ing on error, caching, request deduplication & more, it's one of the many reasons I and, (I assume) a lot of you have reached for libraries such as [Tanstack Query's new Angular adapter](https://tanstack.com/query/v5/docs/framework/angular/overview). In fact, in v18 we replaced quite a decent chunk of our own http logic with Tanstack Query & we're very _mostly_ loved the results :), so if you're looking for a _battle tested_ library to handle these things for you, I'd say look no further, add the library & get back to coding feature's you're clients will love.
 
 If, however, you want to join me on another deep dive, to build, understand, and control...keep reading! :)
 
@@ -23,9 +27,9 @@ Before we begin let's outline our feature goals, so that we can understand what 
 7. Add circuit breaker options so that APIs under a lot of pressure aren't overloaded.
 8. Add cache and prefetch options, similar in behavior to TanStack Query (staleTime + ttl (time-to-live)). Stale data should be shown but immediately refreshed. Multiple resources connected to the same cache entry should reflect updates to that entry.
 9. Allow for flexible mutations, with built-in support for optimistic updates.
-10. Deduplicate requests that are in-flight to ensure more consistent behavior. - optional
+10. Deduplicate requests that are in-flight to ensure more consistent behavior. - bonus
 
-Keep in mind that the async part of signals is currently changing very quickly, with Angular sure to add new resource primitive & SolidJs exploring brand new ideas like [createAsync](https://dev.to/this-is-learning/async-derivations-in-reactivity-ec5), it's definitely an interesting time to be in the JS ecosystem. We'll keep an eye out on all of them & come up with new additions together.
+Keep in mind that the async part of signals is currently changing very quickly, with Angular sure to add new resource primitive & SolidJs exploring brand new ideas like [createAsync](https://dev.to/this-is-learning/async-derivations-in-reactivity-ec5), it's definitely an interesting time to be in the JS ecosystem. We'll keep an eye out on all of them & come up with new additions together as things evolve.
 
 Alrighty, I think that should be _more than enough_ for modern applications...Let's get started building our new primitives 1 step at a time, adding each feature to them as we go.
 
@@ -243,9 +247,9 @@ export function extendedResource<TResult, TRaw = TResult>(request: () => HttpRes
 }
 ```
 
-So there we have it, our _beta_ version of the extendedResource :) I hope the code & comments make it all self explanatory.
+So there we have it, our _initial_ version of extendedResource :) I hope the code & comments make it all self explanatory.
 
-One thing I'd like to expand on is that I've consciously restricted the main interface so that it only accepts a request function instead of the many variations `httpResource` provides such as a simple string. This is because I believe all this additional logic is not really necessary if you have an _immutable_ piece of state, fetched at say the top level of your application & even if you wanted some particular feature such as refresh/retry for that, you could simply just pass that into this signature & it would work perfectly. Likewise we don't really require .blob/.text in our apps, if you do it would be simple enough to add this functionality or create a separate resource extension for that following the same patterns/code. The point I'm trying to make, in a very roundabout way, is...let's keep it simple.
+One thing I'd like to expand on is that I've consciously restricted the main interface so that it only accepts a request function instead of the many variations `httpResource` provides such as a simple string. This is because I believe all this additional logic is not really necessary if you have an _immutable_ piece of state, fetched at say the top level of your application & even if you wanted some particular feature such as refresh/retry for that, you could simply just pass that into this signature & it would work perfectly. Likewise we don't really require .blob/.text in our apps, if you do it would be simple enough to add this functionality or create a separate resource extension for that following the same patterns/code. The point I'm trying to make, in a very roundabout way, is...let's _keep it simple_.
 
 ## The circuit breaker
 
@@ -320,7 +324,7 @@ function internalCeateCircuitBreaker(treshold = 5, resetTimeout = 30000): Circui
 function createNeverBrokenCircuitBreaker(): CircuitBreaker {
   return {
     isClosed: computed(() => false),
-    status: signal("OPEN"),
+    status: computed(() => "OPEN"),
     fail: () => {
       // noop
     },
@@ -382,7 +386,7 @@ export function extendedResource<TResult, TRaw = TResult>(
   ...other resource code
 
 
-  // iterate circuit breaker state, is effect as a computed would cause a circular dependency (resource -> cb -> resource)
+  // iterate circuit breaker state, using an effect since, again, this is inherently a side effect
   const cbEffectRef = effect(() => {
     const status = resource.status();
     if (status === ResourceStatus.Error) cb.fail();
@@ -391,7 +395,7 @@ export function extendedResource<TResult, TRaw = TResult>(
 
   return {
     ...resource,
-    disabled: computed(() => cb.isClosed() || stableRequest() === undefined), // also disabled if for some reason the returned request is still undefined
+    disabled: computed(() => cb.isClosed() || stableRequest() === undefined), // also disabled if the returned request is undefined
     reload: () => {
       cb.halfOpen(); // open the circuit for manual reload
       return resource.reload();
@@ -406,7 +410,9 @@ export function extendedResource<TResult, TRaw = TResult>(
 
 ## Caching - the "hard" stuff
 
-Rather luckily we are still using a single-threaded language, so we can create a simple cache without too much difficulty. You can replace this with any cache implementation really such as unstorage or even tanstack's QueryCache...as long as it has a way of communicating _changes_ to certain keys, it should be fine. For best results we should however stick with signals. I've also used the `mutable` primitive from [Part 1]() for performance reasons, feel free to replace it with a normal signal & destructure if you feel more comfortable with that :).
+Again, rather luckily, we are using a single-threaded language, so we can create a simple cache without too much difficulty. You can replace this with any cache implementation really such as unstorage or even tanstack's QueryCache...as long as it has a way of communicating _changes_ to certain keys, it should be fine. For best results we should however stick with signals. I've also used the `mutable` primitive from [Part 1](https://dev.to/mihamulec/fun-grained-reactivity-in-angular-part-1-primitives-41ia) for performance reasons, feel free to replace it with a normal signal & destructure if you feel more comfortable with that :).
+
+As we know, cache invalidation is always tricky, but I've personally found Tanstack's approach of a default 0 staleTime, but larger TTL to be quite appropriate for most of our usecases. This will result in the _stale_ data being displayed so that the app feels _fast_, but also refreshes that data in the background.
 
 ```typescript
 // cache.ts
@@ -862,16 +868,16 @@ Well that was quite the chunk of code :) As you can see we're doing a few things
 - We're setting HttpResponse objects in the cache for valid requests
 - If we make a request and we find an entry that is not expired and not stale, we return it
 - If we find a value that is stale, we return it, but also make a request so that it is refreshed _behind the hood_
-- If we dont find a value, we, of course, just make a request
+- If we dont find a value, we, of course, just make a request & fill the cache for next time
 - If multiple resources are _listening_ to the same key, they are all updated to the latest value, when a new resource is instantiated/reloaded/manually set
-- We can _prefill_ the cache by calling `prefetch()`, which can be useful when say hovering over a link, or fetching the next page for the table. This is disabled if the resource doesn't have a cache option (as we can't store the response anywhere), or if the user is on a slow mobile connection, to not overload it.
-- We're using signals thorughout the state, so the _reactive graph's_ dependencies are solidly set & the scheduler can figure it all out.
+- We can _pre-fill_ the cache by calling `prefetch()`, which can be useful when say hovering over a link, or fetching the next page for the table. This is disabled if the resource doesn't have a cache option (as we can't store the response anywhere), or if the user is on a slow mobile connection, to not overload it.
+- We're using signals thorughout the core state, so the _reactive graph's_ dependencies are solidly set & the scheduler can figure it all out.
 
-One thing though, we had to split some logic between the interceptor (fresh data & setting cache) and the resource itself, this is due to the .isLoading signal within the resource. If we simply returned the stale data from the interceptor the status of the resource would no longer be loading, as the request would have been completed, as far as it's concerned. This is why we separated this logic. I'll admit it's not the cleanest approach, but sometimes we just have to get our hands dirty :).
+_One thing...we had to split some logic between the interceptor (fresh data & setting cache) and the resource itself (stale data & cache subscription), this is due to the .isLoading/status sigals within the resource. If we simply returned the stale data from the interceptor the status of the resource would no longer be loading, as the request would have been completed, as far as it's concerned. It would still update when the request actually comppletes, but I feel that a loading state is very appropriate for this scenario. This is why we separated this logic. I'll admit it's not the cleanest approach, but sometimes we just have to get our hands dirty :)._
 
 ## Mutations
 
-Since we now have a solid foundation for _getting_ data to our client, let's start thinking about how we're going to mutate that state. Personally I like tanstack's approach here, where a `mutation` is setup with various callbacks, such as onError, & returns a function which is called with the next request whenever needed. So far this has proven quite robust in our production & honestly what I find to be the _easiest_ way of managing complexity. I propose we setup 4 callbacks:
+Since we now have a solid foundation for _fetching_ data to our client, let's start thinking about how we're going to mutate that state. Personally I like Tanstack's approach here, where a `mutation` is setup with various callbacks, such as onError, & returns a function which is called with the next request whenever needed. So far this has proven quite robust in our production & honestly what I find to be the _easiest_ way of managing complexity. I propose we setup 4 callbacks:
 
 - onMutate: will be called when the function is called (before request)
 - onError: will be called when an error happens
@@ -1010,7 +1016,7 @@ export function mutationResource<TResult, TRaw = TResult, TCTX = void>(request: 
 
 ### Optimistic updates
 
-As you can see the above interface allows for easy updates to other existing resources, as such we can also provide a _helper_ option (it could also be a separate function if you prefer) to optimistically update another resource of the same type (say we have a getById & a patch mutation resource).
+As you can see the above interface allows for easy updates to other existing resources, as such we can also provide a _helper_ option (it could also be a separate function if you prefer) to optimistically update another resource of the same type (say we have a _getById_ resource & a _patch_ mutation resource in a store).
 
 ```typescript
 export type MutationResourceOptions<
@@ -1072,13 +1078,15 @@ export function mutationResource<TResult, TRaw = TResult, TCTX = void>(
 }
 ```
 
-Personally I prefer to be slightly more manual about these things, so I'd leave the interface as it's outlined originally & simple use the provided callbacks to update state as I see fit. After all, we save very little code this way. Here's an example which is slightly more advanced (although it uses slightly different primitives, they are conceptually similar enough); [event-definition.store.ts](https://github.com/mihajm/event7/blob/master/libs/event-definition/client/src/lib/event-definition.store.ts). Here we're similarly doing an optimistic update, but giving the user both a "retry" and a "re-open" option. This is dues to the form itself being within a dialog, which we close before the update. Since we preserve the form state with our primitives from [Part 2](https://dev.to/mihamulec/fun-grained-reactivity-in-angular-part-2-forms-e84) we can simply re-open the dialog and revert the data, making sure the user never loses anything :).
+Personally I prefer to be slightly more manual about these things, so I'd leave the interface as it's outlined originally & simple use the provided callbacks to update state as I see fit. After all, we save very little code this way. Here's an example which is slightly more advanced (although it uses slightly different primitives, they are conceptually similar enough); [event-definition.store.ts](https://github.com/mihajm/event7/blob/master/libs/event-definition/client/src/lib/event-definition.store.ts).
+
+I'm also highlighting it, because it contains an interesting solution to an optimistic update issue; _loss of state_. Specifically it contains it's forms in dialog components, which are optimistically closed when the user confirms. If we just _reverted_ the state on error, their work would be lost forever. The solution is quite simple though, we pass the [form state](https://dev.to/mihamulec/fun-grained-reactivity-in-angular-part-2-forms-e84) into our `mutationResource`'s context & re-open that state on error (+ display a message), this allows the user to potentially _fix_ what went wrong.
 
 ## Bonus - Deduplication
 
-Alright time for a bit of a bonus feature: request deduplication. If for some reason, we make a request to an url, while another to the same one is still in flight...let's not call the server twice. This allows us to use our resources in a more _worry-free_ manner, just like tanstack.
+Alright time for a bit of a bonus feature: request deduplication. If for some reason, we make a request to an url (+ params), while another to the same one is still in flight...let's not call the server twice. This allows us to use our resources in a more _worry-free_ manner, just like Tanstack.
 
-_Originally this interceptor was inspired by this article [Request Deduplication in Angular](https://dev.to/kasual1/request-deduplication-in-angular-3pd8). In fact the code is still quite similar, since it works well. I thought I'd add it here as well, since it *roundes out* our feature set nicely._
+_Originally this interceptor was inspired by this article [Request Deduplication in Angular](https://dev.to/kasual1/request-deduplication-in-angular-3pd8). In fact the code is still quite similar, since it works well. I thought I'd add it here as well, since it roundes out our feature set nicely._
 
 ```typescript
 // Heavily inpsired by: https://dev.to/kasual1/request-deduplication-in-angular-3pd8
