@@ -1114,4 +1114,8 @@ export function createDedupeRequestsInterceptor(allowed = ["GET", "DELETE", "HEA
 }
 ```
 
-Well, that's all for now. I'm hope you find these _helpers/extensions_ as useful as we do! Other than that, i'll see you in the next article, happy coding! 🚀
+## Sign off
+
+Well, that's all for now. I hope you find these _helpers_ as useful as we do!
+
+I'll be taking a short break from this series for now, but I have a few cool things _in the oven_ such as a typesafe & modular localization library [sneak preview](https://github.com/mihajm/localization-demo) & a very nice data table component, which I can't wait to share with you all. :) Other than that, see you in the next article, happy coding! 🚀
