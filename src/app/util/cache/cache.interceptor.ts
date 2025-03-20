@@ -149,6 +149,13 @@ function resolveTimings(
 
   if (cacheControl.maxAge !== null) timings.ttl = cacheControl.maxAge * 1000;
 
+  // if stale-while-revalidate is set, we must revalidate after that time at the latest, but we can still serve the stale data
+  if (cacheControl.staleWhileRevalidate !== null) {
+    const ms = cacheControl.staleWhileRevalidate * 1000;
+    if (timings.staleTime === undefined || timings.staleTime > ms)
+      timings.staleTime = ms;
+  }
+
   return timings;
 }
 
@@ -199,13 +206,7 @@ export function createCacheInterceptor(
             opt.ttl
           );
 
-          cache.store(
-            key,
-            event,
-            staleTime,
-            ttl,
-            cacheControl.staleWhileRevalidate
-          );
+          cache.store(key, event, staleTime, ttl);
         }
       }),
       map((event) => {

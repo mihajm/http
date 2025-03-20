@@ -4,7 +4,7 @@ In previous installments of this series, we explored building foundational signa
 
 ## Why...just why?
 
-Angular has long offered quite a robust suite of tools to manage HTTP communication/asyn state. Built in tools such as `HttpClient`, the `AsyncPipe`, interceptors etc. have allowed us to build very advanced & robust features throughout the years. But it seems times are shifting.
+Angular has long offered quite a robust suite of tools to manage HTTP communication/async state. Built in tools such as `HttpClient`, the `AsyncPipe`, interceptors etc. have allowed us to build very advanced & robust features throughout the years. But it seems times are shifting.
 
 Angular is evolving these primitives with signal based alternatives such as `httpResource`, which allow us to better hook in to our _new 'fine-grained' state_, and honestly it's about time! RxJs Observables have long been something that most people need time to wrap their heads around & recently `HttpClient` has been the source of most (if not all) `Observables` in _high-level_ parts of our codebase. Likewise the typical pattern of having a Service class whose function returns an `Observable`, which completes when the request finishes/errors, has always been slightly off to me...it makes sense for socket like subscriptions, but not for one-and-done requests. It's why I, personally, welcome all the new signal based primitives, such as `httpResource`, hopefuly they make our lives easier & our codebases more sane.
 
@@ -441,7 +441,6 @@ type CacheEntry<T> = {
   useCount: number;
   expiresAt: number;
   timeout: ReturnType<typeof setTimeout>;
-  swr: number | null;
 };
 
 export type CleanupType = LRUCleanupType | OldsetCleanupType;
@@ -520,7 +519,7 @@ export class Cache<T> {
     return this.getInternal(key);
   }
 
-  store(key: string, value: T, staleTime = this.staleTime, ttl = this.ttl, swr: number | null = null) {
+  store(key: string, value: T, staleTime = this.staleTime, ttl = this.ttl) {
     const entry = this.getUntracked(key);
     if (entry) {
       clearTimeout(entry.timeout); // stop invalidation
@@ -541,7 +540,6 @@ export class Cache<T> {
         stale: now + staleTime,
         expiresAt: now + ttl,
         timeout: setTimeout(() => this.invalidate(key), ttl),
-        swr,
       });
       return map;
     });
@@ -738,6 +736,12 @@ function resolveTimings(cacheControl: ResolvedCacheControl, staleTime?: number, 
 
   if (cacheControl.maxAge !== null) timings.ttl = cacheControl.maxAge * 1000;
 
+  // if stale-while-revalidate is set, we must revalidate after that time at the latest, but we can still serve the stale data
+  if (cacheControl.staleWhileRevalidate !== null) {
+    const ms = cacheControl.staleWhileRevalidate * 1000;
+    if (timings.staleTime === undefined || timings.staleTime > ms) timings.staleTime = ms;
+  }
+
   return timings;
 }
 
@@ -779,7 +783,7 @@ export function createCacheInterceptor(allowedMethods = ["GET", "HEAD", "OPTIONS
 
           const { staleTime, ttl } = resolveTimings(cacheControl, opt.staleTime, opt.ttl);
 
-          cache.store(key, event, staleTime, ttl, cacheControl.staleWhileRevalidate);
+          cache.store(key, event, staleTime, ttl);
         }
       }),
       map((event) => {

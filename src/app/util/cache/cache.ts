@@ -31,7 +31,6 @@ type CacheEntry<T> = {
   useCount: number;
   expiresAt: number;
   timeout: ReturnType<typeof setTimeout>;
-  swr: number | null;
 };
 
 export type CleanupType = LRUCleanupType | OldsetCleanupType;
@@ -115,13 +114,7 @@ export class Cache<T> {
     return this.getInternal(key);
   }
 
-  store(
-    key: string,
-    value: T,
-    staleTime = this.staleTime,
-    ttl = this.ttl,
-    swr: number | null = null
-  ) {
+  store(key: string, value: T, staleTime = this.staleTime, ttl = this.ttl) {
     const entry = this.getUntracked(key);
     if (entry) {
       clearTimeout(entry.timeout); // stop invalidation
@@ -142,7 +135,6 @@ export class Cache<T> {
         stale: now + staleTime,
         expiresAt: now + ttl,
         timeout: setTimeout(() => this.invalidate(key), ttl),
-        swr,
       });
       return map;
     });
