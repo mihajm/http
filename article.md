@@ -1,6 +1,6 @@
-# Fun-grained Reactivity in Angular: Part 3 - Client-Side HTTP
+# Fun-grained Reactivity in Angular: Part 3 - Resources
 
-In the previous installments of this series, we explored building foundational signal-based primitives such (`mutable`, `store`, `derived`) and applied them to create reactive form controls. This time, we turn our attention to another critical aspect of modern web applications: _client-side_ management of asynchronous data. Don't worry though we'll get to _server-side_ (featuring [Analog](https://analogjs.org/)) soon enough! ;)
+In previous installments of this series, we explored building foundational signal-based primitives such (`mutable`, `store`, `derived`) and applied them to create reactive form controls. This time, we turn our attention to another critical aspect of modern web applications: _client-side_ management of asynchronous data. Don't worry though we'll get to _server-side_ (featuring [Analog](https://analogjs.org/)) soon enough! ;)
 
 ## Why...just why?
 
@@ -222,7 +222,7 @@ export function extendedResource<TResult, TRaw = TResult>(request: () => HttpRes
     ...options,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     parse: options?.parse as any, // Not my favorite thing to do, but here it is completely safe.
-  }) as HttpResourceRef<TResult>; // type case due to TS infering that it could also be TResult | undefined. This inference is not correct as function overloading prevents it.
+  }) as HttpResourceRef<TResult>; // type cast due to TS infering that it could also be TResult | undefined. This inference is not correct as function overloading prevents it.
 
   resource = refresh(resource, destroyRef, options?.refresh);
   resource = retryOnError(resource, options?.retry);
@@ -416,8 +416,8 @@ As we know, cache invalidation is always tricky, but I've personally found Tanst
 
 ```typescript
 // cache.ts
-import { HttpEvent } from "@angular/common/http";
-import { computed, inject, Injector, InjectionToken, Provider, Signal, untracked } from "@angular/core";
+import type { HttpResponse } from "@angular/common/http";
+import { computed, inject, InjectionToken, Injector, type Provider, type Signal, untracked } from "@angular/core";
 import { Subject } from "rxjs";
 import { v7 } from "uuid";
 import { mutable } from "./mutable";
@@ -441,6 +441,7 @@ type CacheEntry<T> = {
   useCount: number;
   expiresAt: number;
   timeout: ReturnType<typeof setTimeout>;
+  swr: number | null;
 };
 
 export type CleanupType = LRUCleanupType | OldsetCleanupType;
@@ -465,7 +466,7 @@ export class Cache<T> {
     cleanupOpt: Partial<CleanupType> = {
       type: "lru",
       maxSize: 1000,
-      checkInterval: 1000 * 60 * 60, // 1 hour
+      checkInterval: ONE_HOUR,
     }
   ) {
     this.cleanupOpt = {
@@ -492,28 +493,34 @@ export class Cache<T> {
     registry.register(this, destroyId);
   }
 
-  private getInternal(key: () => string | null): Signal<CacheEntry<T> | null> {
+  private getInternal(key: () => string | null): Signal<(CacheEntry<T> & { isStale: boolean }) | null> {
     const keySignal = computed(() => key());
 
     return computed(() => {
       const key = keySignal();
       if (!key) return null;
       const found = this.internal().get(key);
-      if (!found || found.expiresAt <= Date.now()) return null;
+
+      const now = Date.now();
+
+      if (!found || found.expiresAt <= now) return null;
       found.useCount++;
-      return found;
+      return {
+        ...found,
+        isStale: found.stale <= now,
+      };
     });
   }
 
-  getUntracked(key: string): CacheEntry<T> | null {
+  getUntracked(key: string): (CacheEntry<T> & { isStale: boolean }) | null {
     return untracked(this.getInternal(() => key));
   }
 
-  get(key: () => string | null): Signal<CacheEntry<T> | null> {
+  get(key: () => string | null): Signal<(CacheEntry<T> & { isStale: boolean }) | null> {
     return this.getInternal(key);
   }
 
-  store(key: string, value: T, staleTime = this.staleTime, ttl = this.ttl) {
+  store(key: string, value: T, staleTime = this.staleTime, ttl = this.ttl, swr: number | null = null) {
     const entry = this.getUntracked(key);
     if (entry) {
       clearTimeout(entry.timeout); // stop invalidation
@@ -521,14 +528,20 @@ export class Cache<T> {
 
     const prevCount = entry?.useCount ?? 0;
 
+    // ttl cannot be less than staleTime
+    if (ttl < staleTime) staleTime = ttl;
+
+    const now = Date.now();
+
     this.internal.mutate((map) => {
       map.set(key, {
         value,
-        created: entry?.created ?? Date.now(),
+        created: entry?.created ?? now,
         useCount: prevCount + 1,
-        stale: Date.now() + staleTime,
-        expiresAt: Date.now() + ttl,
+        stale: now + staleTime,
+        expiresAt: now + ttl,
         timeout: setTimeout(() => this.invalidate(key), ttl),
+        swr,
       });
       return map;
     });
@@ -574,7 +587,7 @@ type CacheOptions = {
   cleanup?: Partial<CleanupType>;
 };
 
-const CLIENT_CACHE_TOKEN = new InjectionToken<Cache<HttpEvent<unknown>>>("INTERNAL_CLIENT_CACHE");
+const CLIENT_CACHE_TOKEN = new InjectionToken<Cache<HttpResponse<unknown>>>("INTERNAL_CLIENT_CACHE");
 
 export function provideCache(opt?: CacheOptions): Provider {
   return {
@@ -584,14 +597,14 @@ export function provideCache(opt?: CacheOptions): Provider {
 }
 
 export function injectCache(injector?: Injector) {
-  return injector ? injector.get(CLIEANT_CACHE_TOKEN) : inject(CLIENT_CACHE_TOKEN);
+  return injector ? injector.get(CLIENT_CACHE_TOKEN) : inject(CLIENT_CACHE_TOKEN);
 }
 ```
 
 ```typescript
 // cache.interceptor.ts
 import { HttpContext, HttpContextToken, type HttpEvent, type HttpHandlerFn, type HttpInterceptorFn, type HttpRequest, HttpResponse } from "@angular/common/http";
-import { Observable, of, tap } from "rxjs";
+import { map, Observable, of, tap } from "rxjs";
 import { injectCache } from "./cache";
 
 type CacheEntryOptions = {
@@ -618,6 +631,116 @@ function getCacheContext(ctx: HttpContext): CacheEntryOptions {
   return ctx.get(CACHE_CONTEXT);
 }
 
+type ResolvedCacheControl = {
+  noStore: boolean;
+  noCache: boolean;
+  mustRevalidate: boolean;
+  immutable: boolean;
+  maxAge: number | null;
+  staleWhileRevalidate: number | null;
+};
+
+function parseCacheControlHeader(req: HttpResponse<unknown>): ResolvedCacheControl {
+  const header = req.headers.get("Cache-Control");
+
+  let sMaxAge: number | null = null;
+  const directives: ResolvedCacheControl = {
+    noStore: false,
+    noCache: false,
+    mustRevalidate: false,
+    immutable: false,
+    maxAge: null,
+    staleWhileRevalidate: null,
+  };
+
+  if (!header) return directives;
+
+  const parts = header.split(",");
+
+  for (const part of parts) {
+    const [unparsedKey, value] = part.trim().split("=");
+    const key = unparsedKey.trim().toLowerCase();
+
+    switch (key) {
+      case "no-store":
+        directives.noStore = true;
+        break;
+      case "no-cache":
+        directives.noCache = true;
+        break;
+      case "must-revalidate":
+      case "proxy-revalidate":
+        directives.mustRevalidate = true;
+        break;
+      case "immutable":
+        directives.immutable = true;
+        break;
+      case "max-age":
+        if (!value) break;
+        const parsedValue = parseInt(value, 10);
+        if (!isNaN(parsedValue)) directives.maxAge = parsedValue;
+        break;
+      case "s-max-age": {
+        if (!value) break;
+        const parsedValue = parseInt(value, 10);
+        if (!isNaN(parsedValue)) sMaxAge = parsedValue;
+        break;
+      }
+      case "stale-while-revalidate": {
+        if (!value) break;
+        const parsedValue = parseInt(value, 10);
+        if (!isNaN(parsedValue)) directives.staleWhileRevalidate = parsedValue;
+        break;
+      }
+    }
+  }
+
+  // s-max-age takes precedence over max-age
+  if (sMaxAge !== null) directives.maxAge = sMaxAge;
+
+  // if no store nothing else is relevant
+  if (directives.noStore)
+    return {
+      noStore: true,
+      noCache: false,
+      mustRevalidate: false,
+      immutable: false,
+      maxAge: null,
+      staleWhileRevalidate: null,
+    };
+
+  // max age does not apply to immutable resources
+  if (directives.immutable)
+    return {
+      ...directives,
+      maxAge: null,
+    };
+
+  return directives;
+}
+
+function resolveTimings(cacheControl: ResolvedCacheControl, staleTime?: number, ttl?: number): { staleTime?: number; ttl?: number } {
+  const timings = {
+    staleTime,
+    ttl,
+  };
+
+  if (cacheControl.immutable)
+    return {
+      staleTime: Infinity,
+      ttl: Infinity,
+    };
+
+  // if no-cache is set, we must always revalidate
+  if (cacheControl.noCache || cacheControl.mustRevalidate) timings.staleTime = 0;
+
+  if (cacheControl.staleWhileRevalidate !== null) timings.staleTime = cacheControl.staleWhileRevalidate;
+
+  if (cacheControl.maxAge !== null) timings.ttl = cacheControl.maxAge * 1000;
+
+  return timings;
+}
+
 export function createCacheInterceptor(allowedMethods = ["GET", "HEAD", "OPTIONS"]): HttpInterceptorFn {
   const CACHE_METHODS = new Set<string>(allowedMethods);
 
@@ -630,18 +753,42 @@ export function createCacheInterceptor(allowedMethods = ["GET", "HEAD", "OPTIONS
     if (!opt.cache) return next(req);
 
     const key = opt.key ?? req.urlWithParams;
-    const entry = cache.getUntracked(key);
+    const entry = cache.getUntracked(key); // null if expired or not found
 
     // If the entry is not stale, return it
-    if (entry && entry.stale > Date.now()) return of(entry.value);
+    if (entry && !entry.isStale) return of(entry.value);
 
     // resource itself handles case of showing stale data...the request must process as this will "refresh said data"
 
+    const eTag = entry?.value.headers.get("ETag");
+    const lastModified = entry?.value.headers.get("Last-Modified");
+
+    if (eTag) {
+      req = req.clone({ setHeaders: { "If-None-Match": eTag } });
+    }
+
+    if (lastModified) {
+      req = req.clone({ setHeaders: { "If-Modified-Since": lastModified } });
+    }
+
     return next(req).pipe(
-      tap((e) => {
-        if (e instanceof HttpResponse && e.ok) {
-          cache.store(key, e, opt.staleTime, opt.ttl);
+      tap((event) => {
+        if (event instanceof HttpResponse && event.ok) {
+          const cacheControl = parseCacheControlHeader(event);
+          if (cacheControl.noStore) return;
+
+          const { staleTime, ttl } = resolveTimings(cacheControl, opt.staleTime, opt.ttl);
+
+          cache.store(key, event, staleTime, ttl, cacheControl.staleWhileRevalidate);
         }
+      }),
+      map((event) => {
+        // handle 304 responses due to eTag/last-modified
+        if (event instanceof HttpResponse && event.status === 304 && entry) {
+          return entry.value;
+        }
+
+        return event;
       })
     );
   };

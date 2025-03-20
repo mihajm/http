@@ -1,11 +1,11 @@
-import { HttpEvent } from '@angular/common/http';
+import type { HttpResponse } from '@angular/common/http';
 import {
   computed,
   inject,
   InjectionToken,
   Injector,
-  Provider,
-  Signal,
+  type Provider,
+  type Signal,
   untracked,
 } from '@angular/core';
 import { Subject } from 'rxjs';
@@ -31,6 +31,7 @@ type CacheEntry<T> = {
   useCount: number;
   expiresAt: number;
   timeout: ReturnType<typeof setTimeout>;
+  swr: number | null;
 };
 
 export type CleanupType = LRUCleanupType | OldsetCleanupType;
@@ -55,7 +56,7 @@ export class Cache<T> {
     cleanupOpt: Partial<CleanupType> = {
       type: 'lru',
       maxSize: 1000,
-      checkInterval: 1000 * 60 * 60, // 1 hour
+      checkInterval: ONE_HOUR,
     }
   ) {
     this.cleanupOpt = {
@@ -83,28 +84,44 @@ export class Cache<T> {
     registry.register(this, destroyId);
   }
 
-  private getInternal(key: () => string | null): Signal<CacheEntry<T> | null> {
+  private getInternal(
+    key: () => string | null
+  ): Signal<(CacheEntry<T> & { isStale: boolean }) | null> {
     const keySignal = computed(() => key());
 
     return computed(() => {
       const key = keySignal();
       if (!key) return null;
       const found = this.internal().get(key);
-      if (!found || found.expiresAt <= Date.now()) return null;
+
+      const now = Date.now();
+
+      if (!found || found.expiresAt <= now) return null;
       found.useCount++;
-      return found;
+      return {
+        ...found,
+        isStale: found.stale <= now,
+      };
     });
   }
 
-  getUntracked(key: string): CacheEntry<T> | null {
+  getUntracked(key: string): (CacheEntry<T> & { isStale: boolean }) | null {
     return untracked(this.getInternal(() => key));
   }
 
-  get(key: () => string | null): Signal<CacheEntry<T> | null> {
+  get(
+    key: () => string | null
+  ): Signal<(CacheEntry<T> & { isStale: boolean }) | null> {
     return this.getInternal(key);
   }
 
-  store(key: string, value: T, staleTime = this.staleTime, ttl = this.ttl) {
+  store(
+    key: string,
+    value: T,
+    staleTime = this.staleTime,
+    ttl = this.ttl,
+    swr: number | null = null
+  ) {
     const entry = this.getUntracked(key);
     if (entry) {
       clearTimeout(entry.timeout); // stop invalidation
@@ -112,14 +129,20 @@ export class Cache<T> {
 
     const prevCount = entry?.useCount ?? 0;
 
+    // ttl cannot be less than staleTime
+    if (ttl < staleTime) staleTime = ttl;
+
+    const now = Date.now();
+
     this.internal.mutate((map) => {
       map.set(key, {
         value,
-        created: entry?.created ?? Date.now(),
+        created: entry?.created ?? now,
         useCount: prevCount + 1,
-        stale: Date.now() + staleTime,
-        expiresAt: Date.now() + ttl,
+        stale: now + staleTime,
+        expiresAt: now + ttl,
         timeout: setTimeout(() => this.invalidate(key), ttl),
+        swr,
       });
       return map;
     });
@@ -167,7 +190,7 @@ type CacheOptions = {
   cleanup?: Partial<CleanupType>;
 };
 
-const CLIENT_CACHE_TOKEN = new InjectionToken<Cache<HttpEvent<unknown>>>(
+const CLIENT_CACHE_TOKEN = new InjectionToken<Cache<HttpResponse<unknown>>>(
   'INTERNAL_CLIENT_CACHE'
 );
 
