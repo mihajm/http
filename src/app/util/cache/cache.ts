@@ -8,7 +8,6 @@ import {
   type Signal,
   untracked,
 } from '@angular/core';
-import { Subject } from 'rxjs';
 import { v7 } from 'uuid';
 import { mutable } from './mutable';
 
@@ -46,7 +45,6 @@ const DEFAULT_CLEANUP_OPT = {
 
 export class Cache<T> {
   private readonly internal = mutable(new Map<string, CacheEntry<T>>());
-  private readonly destroy$ = new Subject<void>();
   private readonly cleanupOpt: CleanupType;
 
   constructor(
@@ -76,7 +74,6 @@ export class Cache<T> {
     const registry = new FinalizationRegistry((id: string) => {
       if (id === destroyId) {
         clearInterval(cleanupInterval);
-        this.destroy$.next();
       }
     });
 
